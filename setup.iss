@@ -1,9 +1,9 @@
 [Setup]
-AppName=MonLogiciel
+AppName=Yetilogs
 AppVersion=1.0
-DefaultDirName={pf}\MonLogiciel
-DefaultGroupName=MonLogiciel
-OutputBaseFilename=MonLogiciel_Setup
+DefaultDirName={pf}\Yetilogs
+DefaultGroupName=Yetilogs
+OutputBaseFilename=Yetilogs
 OutputDir=output
 SetupIconFile=assets\batterie.ico
 UninstallDisplayIcon={app}\version1.exe
