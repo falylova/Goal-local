@@ -2,39 +2,68 @@ name: Build Windows Installer
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install Python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
 
     - name: Install dependencies
-      run: pip install pyinstaller flask waitress
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller flask waitress requests
 
-    - name: Build CD.exe
-      run: pyinstaller --onefile --noconsole src/CD.py
+    # ======================
+    # BUILD CD.exe
+    # ======================
+    - name: Build CD executable
+      run: |
+        pyinstaller --onefile `
+          --noconsole `
+          --collect-all requests `
+          src/CD.py
 
-    - name: Build version1.exe
-      run: pyinstaller --onefile src/version1.py
+    # ======================
+    # BUILD version1.exe
+    # ======================
+    - name: Build version1 executable
+      run: |
+        pyinstaller --onefile `
+          --noconsole `
+          --collect-all requests `
+          --collect-all flask `
+          --collect-all waitress `
+          src/version1.py
 
+    # ======================
+    # INSTALL INNO SETUP
+    # ======================
     - name: Install Inno Setup
-      run: choco install innosetup -y
+      run: |
+        choco install innosetup -y
 
+    # ======================
+    # BUILD INSTALLER
+    # ======================
     - name: Build installer
       run: |
         & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss
 
+    # ======================
+    # UPLOAD INSTALLER
+    # ======================
     - name: Upload installer
       uses: actions/upload-artifact@v4
       with:
         name: MonLogiciel_Setup
-        path: output/*.exe
+        path: Output/*.exe
+
