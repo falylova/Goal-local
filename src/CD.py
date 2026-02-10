@@ -8,10 +8,27 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 import threading
 
+def get_app_dir():
+    app_name = "Yetilogs"
+
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+            app_name
+        )
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
+# Config globale
+APP_DIR = get_app_dir()
+DB_FILE = os.path.join(APP_DIR, "yeti_energie.db")
+
 # Configuration par défaut
 DEFAULT_HOTSPOT_IP = "10.1.1.1"
 DEFAULT_RESEAU_IP = "192.168.137.54"
-DB_FILE = "yeti_energie.db"
 INTERVALLE = 300  # Toutes les 5 min
 STATS_INTERVALLE = 3600  # Stats toutes les heures
 TIMEOUT_RECONNEXION = 3  # Tentatives avant popup d'erreur

@@ -31,9 +31,19 @@ def add_header(response):
     return response
 
 def get_app_dir():
+    app_name = "Yetilogs"
+
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+        base_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+            app_name
+        )
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
 
 # Config globale
 APP_DIR = get_app_dir()
