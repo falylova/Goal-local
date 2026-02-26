@@ -263,116 +263,116 @@ def logout():
     return response
 
 def detect_yeti_ip():
-    possible_ips = [
-        '10.1.1.1',
-        '192.168.137.54',
-        '192.168.1.100',
-        '192.168.0.100',
-    ]
-    
-    print("🔍 Détection automatique de l'IP du Yeti...")
-    for ip in possible_ips:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT mode, ip FROM yeti_network_config ORDER BY id")
+    configs = cursor.fetchall()
+    conn.close()
+
+    print("🔍 Détection automatique sur les IPs enregistrées dans la base...")
+    for mode, ip in configs:
         try:
-            print(f"   Test de {ip}...", end=" ")
-            response = requests.get(f"http://{ip}/state", timeout=2)
+            print(f"   Test {mode:8} → {ip:15} ... ", end="")
+            response = requests.get(f"http://{ip}/state", timeout=2.5)
             if response.status_code == 200:
-                print(f"✅ Trouvé!")
+                print("✅ Trouvé!")
+                # Mettre à jour le statut dans la base
+                conn = sqlite3.connect(DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("UPDATE yeti_network_config SET is_active = 0")
+                cursor.execute("UPDATE yeti_network_config SET is_active = 1, last_tested_success = 1, last_updated = ? WHERE ip = ?", 
+                              (datetime.now().isoformat(), ip))
+                conn.commit()
+                conn.close()
                 return ip, True
             else:
                 print("❌")
-        except:
-            print("❌")
-    
-    print("⚠️  Aucune IP détectée")
+        except Exception as e:
+            print(f"❌ ({str(e)})")
+
+    print("⚠️  Aucune IP fonctionnelle détectée")
     return None, False
 
 def show_config_dialog():
     auto_ip, connected = detect_yeti_ip()
     
+    current_mode, current_ip = get_active_yeti_config()
+    
     root = tk.Tk()
     root.withdraw()
     
-    result_ip = None
-    result_mode = None
-    result_connected = connected
+    if auto_ip and connected:
+        result = messagebox.askyesno(
+            "Connexion détectée",
+            f"Yeti connecté sur {auto_ip} ({current_mode})\n\nUtiliser cette connexion ?",
+            parent=root
+        )
+        if result:
+            return auto_ip, current_mode, True
     
-    try:
-        if auto_ip:
-            result = messagebox.askyesno(
-                "Connexion détectée",
-                f"Yeti détecté sur {auto_ip}\n\nUtiliser cette connexion ?",
-                parent=root
-            )
-            if result:
-                result_ip = auto_ip
-                result_mode = "Auto-détecté"
-            else:
-                choice = messagebox.askquestion(
-                    "Configuration Yeti",
-                    "Choisir le mode de connexion:\n\n"
-                    "OUI = Hotspot Yeti (10.1.1.1)\n"
-                    "NON = Réseau domestique (IP personnalisée)",
-                    icon='question',
-                    parent=root
-                )
-                
-                if choice == 'yes':
-                    result_ip = '10.1.1.1'
-                    result_mode = 'Hotspot'
-                    result_connected = False
-                else:
-                    ip = simpledialog.askstring(
-                        "IP Réseau",
-                        "Entrez l'adresse IP du Yeti sur votre réseau:\n(ex: 192.168.1.100)",
-                        parent=root
-                    )
-                    if ip and ip.strip():
-                        result_ip = ip.strip()
-                        result_mode = 'Réseau'
-                        result_connected = False
-                    else:
-                        result_ip = '10.1.1.1'
-                        result_mode = 'Hotspot'
-                        result_connected = False
-        else:
-            choice = messagebox.askquestion(
-                "Configuration Yeti",
-                "Aucun Yeti détecté.\n\nChoisir le mode de connexion:\n\n"
-                "OUI = Hotspot Yeti (10.1.1.1)\n"
-                "NON = Réseau domestique (IP personnalisée)",
-                icon='question',
-                parent=root
-            )
+    # Sinon on demande à l'utilisateur
+    choice = messagebox.askquestion(
+        "Configuration Yeti",
+        "Aucune connexion automatique détectée.\n\n"
+        "Voulez-vous utiliser le Hotspot Yeti ?\n\n"
+        "OUI = Hotspot (10.1.1.1)\n"
+        "NON = Modifier l'IP réseau domestique",
+        icon='question',
+        parent=root
+    )
+    
+    if choice == 'yes':
+        # Activer hotspot
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE yeti_network_config SET is_active = 0")
+        cursor.execute("UPDATE yeti_network_config SET is_active = 1 WHERE mode = 'hotspot'")
+        conn.commit()
+        conn.close()
+        return '10.1.1.1', 'hotspot', False
+    else:
+        # Demander nouvelle IP réseau
+        new_ip = simpledialog.askstring(
+            "IP Réseau domestique",
+            f"IP actuelle : {current_ip}\n\nNouvelle IP du Yeti sur le réseau :",
+            initialvalue=current_ip,
+            parent=root
+        )
+        
+        if new_ip and new_ip.strip():
+            new_ip = new_ip.strip()
+            # Tester la nouvelle IP
+            try:
+                r = requests.get(f"http://{new_ip}/state", timeout=3)
+                success = r.status_code == 200
+            except:
+                success = False
             
-            if choice == 'yes':
-                result_ip = '10.1.1.1'
-                result_mode = 'Hotspot'
-                result_connected = False
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            
+            if success:
+                # Mettre à jour et activer
+                cursor.execute("UPDATE yeti_network_config SET ip = ?, is_active = 0 WHERE mode = 'reseau'", (new_ip,))
+                cursor.execute("UPDATE yeti_network_config SET is_active = 1 WHERE mode = 'reseau'")
+                messagebox.showinfo("Succès", f"IP réseau mise à jour : {new_ip}\nConnexion OK !")
             else:
-                ip = simpledialog.askstring(
-                    "IP Réseau",
-                    "Entrez l'adresse IP du Yeti sur votre réseau:\n(ex: 192.168.1.100)",
-                    parent=root
-                )
-                if ip and ip.strip():
-                    result_ip = ip.strip()
-                    result_mode = 'Réseau'
-                    result_connected = False
-                else:
-                    result_ip = '10.1.1.1'
-                    result_mode = 'Hotspot'
-                    result_connected = False
-    
-    finally:
-        root.quit()
-        root.destroy()
-        try:
-            import gc
-            gc.collect()
-        except:
-            pass
-    
-    return result_ip, result_mode, result_connected
+                messagebox.showwarning("Attention", f"L'IP {new_ip} ne répond pas.\nSauvegardée mais non activée.")
+                cursor.execute("UPDATE yeti_network_config SET ip = ? WHERE mode = 'reseau'", (new_ip,))
+            
+            conn.commit()
+            conn.close()
+            
+            return new_ip, 'reseau', success
+        else:
+            # Retour à hotspot par défaut
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE yeti_network_config SET is_active = 0")
+            cursor.execute("UPDATE yeti_network_config SET is_active = 1 WHERE mode = 'hotspot'")
+            conn.commit()
+            conn.close()
+            return '10.1.1.1', 'hotspot', False
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -397,6 +397,17 @@ def init_db():
         )
     """)
     
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS yeti_network_config (
+            id INTEGER PRIMARY KEY CHECK (id IN (1, 2)),
+            mode TEXT NOT NULL,          -- 'hotspot' ou 'reseau'
+            ip TEXT NOT NULL,
+            is_active INTEGER DEFAULT 0, -- 1 = actuellement utilisé, 0 = pas utilisé
+            last_tested_success INTEGER DEFAULT 0,
+            last_updated TEXT
+        )
+    """)
+    
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         default_users = [
@@ -405,17 +416,47 @@ def init_db():
         ]
         cursor.executemany("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", default_users)
         print("✅ Users par défaut insérés dans la DB.")
+        
+    # Insérer les deux lignes par défaut si elles n'existent pas
+    cursor.execute("SELECT COUNT(*) FROM yeti_network_config")
+    if cursor.fetchone()[0] == 0:
+        default_configs = [
+            (1, 'hotspot', '10.1.1.1', 1, 0, datetime.now().isoformat()),   # actif par défaut
+            (2, 'reseau',  '192.168.1.100', 0, 0, datetime.now().isoformat())
+        ]
+        cursor.executemany("""
+            INSERT OR IGNORE INTO yeti_network_config 
+            (id, mode, ip, is_active, last_tested_success, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, default_configs)
     
     conn.commit()
     conn.close()
     print(f"DB '{DB_FILE}' initialisée.")
+    
+def get_active_yeti_config():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT mode, ip, is_active 
+        FROM yeti_network_config 
+        WHERE is_active = 1 
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return row[0], row[1]  # mode, ip
+    return 'hotspot', '10.1.1.1'  # fallback    
+
 
 @app.route('/api/current_stats')
 @login_required
 def current_stats():
     global is_connected
     
-    yeti_ip = session.get('yeti_ip', yeti_ip_detected or '10.1.1.1')
+    current_mode, yeti_ip = get_active_yeti_config()
     try:
         response = requests.get(f"http://{yeti_ip}/state", timeout=3)
         is_connected = response.status_code == 200
@@ -457,31 +498,76 @@ def current_stats():
 @admin_required
 def config():
     global is_connected
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # ────────────────────────────────────────
+    # Récupération de la config active (pour GET et POST)
+    cursor.execute("""
+        SELECT mode, ip, is_active 
+        FROM yeti_network_config 
+        WHERE is_active = 1 
+        LIMIT 1
+    """)
+    active_row = cursor.fetchone()
+    
+    if active_row:
+        current_mode, current_ip, _ = active_row
+    else:
+        # Sécurité : si rien n'est actif (table corrompue ou vide)
+        current_mode = 'hotspot'
+        current_ip   = '10.1.1.1'
+    
+    # ────────────────────────────────────────
     if request.method == 'POST':
-        mode = request.form['mode']
-        if mode == 'hotspot':
-            session['yeti_ip'] = '10.1.1.1'
-            session['mode'] = 'Hotspot'
-        else:
-            ip = request.form['ip']
-            if ip:
-                session['yeti_ip'] = ip.strip()
-                session['mode'] = 'Réseau'
-            else:
-                session['yeti_ip'] = '192.168.1.XXX'
-                session['mode'] = 'Réseau'
+        mode = request.form.get('mode')  # 'hotspot' ou 'network' (selon ton ancien HTML)
         
-        yeti_ip = session['yeti_ip']
+        if mode == 'hotspot':
+            new_ip = '10.1.1.1'
+        else:
+            new_ip = request.form.get('ip', '').strip()
+            if not new_ip:
+                new_ip = current_ip  # garder l'ancienne si vide
+        
+        # Désactiver tout
+        cursor.execute("UPDATE yeti_network_config SET is_active = 0")
+        
+        # Activer le bon mode + mettre à jour IP si réseau
+        if mode == 'hotspot':
+            cursor.execute("""
+                UPDATE yeti_network_config 
+                SET is_active = 1, last_updated = ?
+                WHERE mode = 'hotspot'
+            """, (datetime.now().isoformat(),))
+        else:
+            cursor.execute("""
+                UPDATE yeti_network_config 
+                SET ip = ?, is_active = 1, last_updated = ?
+                WHERE mode = 'reseau'
+            """, (new_ip, datetime.now().isoformat()))
+        
+        conn.commit()
+        
+        # Rafraîchir la variable active après mise à jour
+        cursor.execute("SELECT mode, ip FROM yeti_network_config WHERE is_active = 1 LIMIT 1")
+        new_active = cursor.fetchone()
+        if new_active:
+            current_mode, current_ip = new_active
+        
+        # Tester la connexion
         try:
-            response = requests.get(f"http://{yeti_ip}/state", timeout=3)
-            is_connected = response.status_code == 200
+            r = requests.get(f"http://{current_ip}/state", timeout=3)
+            is_connected = (r.status_code == 200)
         except:
             is_connected = False
-        
-        print(f"Mode changé : {session['mode']} avec IP {session['yeti_ip']}")
     
-    yeti_ip = session.get('yeti_ip', yeti_ip_detected or '10.1.1.1')
-    mode = session.get('mode', 'Auto-détecté')
+    # ────────────────────────────────────────
+    # Pour l'affichage (GET ou après POST)
+    yeti_ip = current_ip
+    mode    = current_mode.capitalize() if current_mode else 'Auto-détecté'
+    
+    conn.close()
     
     html = """
     <!DOCTYPE html>
@@ -744,7 +830,6 @@ def manage_users():
                     <input type="password" name="new_password" placeholder="Nouveau password" required>
                 </div>
                 <button type="submit">💾 Mettre à Jour</button>
-                <button type="button" class="edit-btn" onclick="toggleEdit('edit-{{ user[0] }}')">Annuler</button>
             </form>
         </div>
         {% endfor %}
@@ -765,7 +850,7 @@ def manage_users():
 @app.route('/api/ports_state')
 @login_required
 def ports_state():
-    yeti_ip = session.get('yeti_ip', '10.1.1.1')
+    current_mode, yeti_ip = get_active_yeti_config()
 
     try:
         r = requests.get(f"http://{yeti_ip}/state", timeout=3)
@@ -787,7 +872,7 @@ def set_port():
     payload = request.json
     port = payload["port"]
     enable = payload["enable"]
-    yeti_ip = session.get('yeti_ip', '10.1.1.1')
+    current_mode, yeti_ip = get_active_yeti_config()
     value = 1 if enable else 0
     key_map = {
         "ac": "acPortStatus",
@@ -1223,8 +1308,7 @@ def dashboard():
     temp = current[3] if current else 0
     wh_stored = current[4] if current else 0
     
-    yeti_ip = session.get('yeti_ip', yeti_ip_detected or '10.1.1.1')
-    mode = session.get('mode', 'Auto-détecté')
+    current_mode, yeti_ip = get_active_yeti_config()
     
     html = """
     <!DOCTYPE html>
@@ -1880,7 +1964,7 @@ def dashboard():
             <div class="port-info">
                 <div class="port-icon">🏠</div>
                 <div class="port-details">
-                    <div class="port-name">AC 120V</div>
+                    <div class="port-name">AC 230V</div>
                     <div class="port-status off" id="status-ac">Status: Off</div>
                 </div>
             </div>

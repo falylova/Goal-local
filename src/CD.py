@@ -48,12 +48,143 @@ class YetiLogger:
         self.dernier_stats = time.time()
         self.thread = None
         
+    def init_db(self):
+        """Initialiser la DB avec exactement 2 lignes fixes (1=hotspot, 2=reseau)"""
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Table des logs (existante)
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {', '.join([f"{champ} {'TEXT' if champ == 'date_heure' else 'REAL'}" for champ in CHAMPS])}
+            )
+        """)
+        
+        # Table de configuration réseau Yeti - exactement 2 lignes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS yeti_network_config (
+                id INTEGER PRIMARY KEY CHECK (id IN (1, 2)),
+                mode TEXT NOT NULL,          -- 'hotspot' ou 'reseau'
+                ip TEXT NOT NULL,
+                is_active INTEGER DEFAULT 0, -- 1 = actuellement utilisé, 0 = pas utilisé
+                last_tested_success INTEGER DEFAULT 0,
+                last_updated TEXT
+            )
+        """)
+        
+        # Insérer les 2 configurations fixes si elles n'existent pas encore
+        cursor.execute("SELECT COUNT(*) FROM yeti_network_config")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            # Créer les 2 lignes fixes
+            default_configs = [
+                (1, 'hotspot', DEFAULT_HOTSPOT_IP, 0, 0, datetime.now().isoformat()),
+                (2, 'reseau', DEFAULT_RESEAU_IP, 0, 0, datetime.now().isoformat())
+            ]
+            cursor.executemany("""
+                INSERT INTO yeti_network_config 
+                (id, mode, ip, is_active, last_tested_success, last_updated) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, default_configs)
+            print("✅ Configurations réseau initialisées (Hotspot + Réseau).")
+        
+        conn.commit()
+        conn.close()
+        print(f"🗄️ Base de données '{DB_FILE}' initialisée.")
+    
+    def get_config_by_id(self, config_id):
+        """Récupère une config par son ID (1 ou 2)"""
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT mode, ip, is_active, last_tested_success 
+            FROM yeti_network_config 
+            WHERE id = ?
+        """, (config_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result
+    
+    def get_active_config(self):
+        """Récupère la configuration active (celle avec is_active=1)"""
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, mode, ip FROM yeti_network_config 
+            WHERE is_active = 1 LIMIT 1
+        """)
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return result[0], result[1], result[2]  # id, mode, ip
+        return None, None, None
+    
+    def set_active_config(self, config_id, success=True):
+        """Active une config (1 ou 2) et désactive l'autre"""
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Désactiver toutes
+        cursor.execute("UPDATE yeti_network_config SET is_active = 0")
+        
+        # Activer celle choisie
+        cursor.execute("""
+            UPDATE yeti_network_config 
+            SET is_active = 1, last_tested_success = ?, last_updated = ?
+            WHERE id = ?
+        """, (1 if success else 0, datetime.now().isoformat(), config_id))
+        
+        conn.commit()
+        conn.close()
+        
+        # Récupérer les infos pour l'affichage
+        config = self.get_config_by_id(config_id)
+        if config:
+            print(f"💾 Configuration active: ID {config_id} ({config[0]}) - {config[1]}")
+    
+    def update_reseau_ip(self, new_ip):
+        """Met à jour l'IP du mode réseau (ID=2) - remplace l'ancienne"""
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # UPDATE sur ID 2 uniquement, jamais d'INSERT
+        cursor.execute("""
+            UPDATE yeti_network_config 
+            SET ip = ?, last_updated = ?
+            WHERE id = 2
+        """, (new_ip, datetime.now().isoformat()))
+        
+        conn.commit()
+        conn.close()
+        print(f"🔄 IP Réseau mise à jour: {new_ip} (remplace l'ancienne)")
+    
     def selection_ip(self):
-        """Popup pour sélectionner l'IP au démarrage"""
+        """Popup pour sélectionner l'IP - utilise les 2 lignes fixes"""
+        # Vérifier s'il y a une config active
+        active_id, active_mode, active_ip = self.get_active_config()
+        
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True)
         
+        # Proposer d'utiliser la dernière config active si elle existe
+        if active_id and active_mode and active_ip:
+            use_saved = messagebox.askyesno(
+                "Configuration existante",
+                f"Configuration précédente trouvée:\n"
+                f"Mode: {active_mode}\n"
+                f"IP: {active_ip}\n\n"
+                f"Utiliser cette configuration?",
+                parent=root
+            )
+            if use_saved:
+                root.destroy()
+                return active_ip, active_mode
+        
+        # Sinon, demander la configuration
         result = messagebox.askyesno(
             "Configuration IP Yeti", 
             "Voulez-vous utiliser le mode Hotspot (10.1.1.1) ?\n\n"
@@ -63,24 +194,40 @@ class YetiLogger:
         )
         
         if result:
+            # Mode Hotspot - ID 1
             ip = DEFAULT_HOTSPOT_IP
-            mode = "Hotspot"
+            mode = "hotspot"
+            self.set_active_config(1, success=False)
         else:
-            ip = simpledialog.askstring(
+            # Mode Réseau - ID 2
+            # Récupérer l'IP actuelle du réseau
+            config = self.get_config_by_id(2)
+            current_reseau_ip = config[1] if config else DEFAULT_RESEAU_IP
+            
+            # Demander la nouvelle IP
+            new_ip = simpledialog.askstring(
                 "IP Réseau", 
-                f"Entrez l'IP du Yeti sur le réseau domestique\n(défaut: {DEFAULT_RESEAU_IP}):",
-                initialvalue=DEFAULT_RESEAU_IP,
+                f"Entrez l'IP du Yeti sur le réseau domestique\n(actuelle: {current_reseau_ip}):",
+                initialvalue=current_reseau_ip,
                 parent=root
             )
-            if not ip:
-                ip = DEFAULT_RESEAU_IP
-            mode = "Réseau domestique"
+            
+            if not new_ip:
+                new_ip = current_reseau_ip
+            
+            # Si nouvelle IP différente, mettre à jour (UPDATE, pas INSERT)
+            if new_ip != current_reseau_ip:
+                self.update_reseau_ip(new_ip)
+            
+            ip = new_ip
+            mode = "reseau"
+            self.set_active_config(2, success=False)
         
         root.destroy()
         return ip, mode
     
     def verifier_connexion_initiale(self):
-        """Vérifie la connexion et affiche un popup de confirmation"""
+        """Vérifie la connexion et met à jour le statut"""
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True)
@@ -92,6 +239,11 @@ class YetiLogger:
             if data:
                 self.connected = True
                 self.erreurs_consecutives = 0
+                
+                # Déterminer l'ID selon le mode et marquer comme succès
+                config_id = 1 if self.mode == "hotspot" else 2
+                self.set_active_config(config_id, success=True)
+                
                 messagebox.showinfo(
                     "✅ Connexion Réussie",
                     f"Connexion établie avec le Yeti ({self.mode})\n"
@@ -104,6 +256,10 @@ class YetiLogger:
                 root.destroy()
                 return True
         except Exception as e:
+            # Marquer comme échec
+            config_id = 1 if self.mode == "hotspot" else 2
+            self.set_active_config(config_id, success=False)
+            
             messagebox.showerror(
                 "❌ Erreur de Connexion",
                 f"Impossible de se connecter au Yeti\n"
@@ -142,21 +298,6 @@ class YetiLogger:
             self.yeti_ip, self.mode = self.selection_ip()
             self.erreurs_consecutives = 0
             print(f"🔄 Nouvelle IP configurée: {self.yeti_ip} ({self.mode})")
-    
-    def init_db(self):
-        """Initialiser la DB et la table"""
-        if not os.path.exists(DB_FILE):
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute(f"""
-                CREATE TABLE logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    {', '.join([f"{champ} {'TEXT' if champ == 'date_heure' else 'REAL'}" for champ in CHAMPS])}
-                )
-            """)
-            conn.commit()
-            conn.close()
-            print(f"🗄️ Base de données '{DB_FILE}' créée.")
     
     def afficher_donnees_utiles(self, data):
         """Afficher les données dans la console"""
@@ -226,6 +367,8 @@ class YetiLogger:
             if not self.connected:
                 print("✅ Connexion rétablie!")
                 self.connected = True
+                config_id = 1 if self.mode == "hotspot" else 2
+                self.set_active_config(config_id, success=True)
             self.erreurs_consecutives = 0
             
             # Afficher et sauvegarder
@@ -253,6 +396,8 @@ class YetiLogger:
             # Si trop d'erreurs consécutives
             if self.erreurs_consecutives >= TIMEOUT_RECONNEXION:
                 self.connected = False
+                config_id = 1 if self.mode == "hotspot" else 2
+                self.set_active_config(config_id, success=False)
                 self.afficher_erreur_reconnexion()
     
     def run_loop(self):

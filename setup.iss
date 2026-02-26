@@ -16,8 +16,8 @@ Source: "dist\version1.exe"; DestDir: "{app}"
 Source: "assets\batterie.ico"; DestDir: "{app}"
 
 [Icons]
-Name: "{group}\MonLogiciel"; Filename: "{app}\version1.exe"; IconFilename: "{app}\batterie.ico"
-Name: "{commondesktop}\MonLogiciel"; Filename: "{app}\version1.exe"; IconFilename: "{app}\batterie.ico"; Tasks: desktopicon
+Name: "{group}\Yeti"; Filename: "{app}\version1.exe"; IconFilename: "{app}\batterie.ico"
+Name: "{commondesktop}\Yeti"; Filename: "{app}\version1.exe"; IconFilename: "{app}\batterie.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: desktopicon; Description: Créer une icône sur le bureau
