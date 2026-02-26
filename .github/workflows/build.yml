@@ -33,16 +33,16 @@ jobs:
           src/CD.py
 
     # ======================
-    # BUILD version1.exe
+    # BUILD version2.exe
     # ======================
-    - name: Build version1 executable
+    - name: Build version2 executable
       run: |
         pyinstaller --onefile `
           --noconsole `
           --collect-all requests `
           --collect-all flask `
           --collect-all waitress `
-          src/version1.py
+          src/version2.py
 
     # ======================
     # INSTALL INNO SETUP
